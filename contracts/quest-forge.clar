@@ -7,6 +7,17 @@
 (define-constant err-quest-not-found (err u102))
 (define-constant err-already-completed (err u103))
 (define-constant err-invalid-difficulty (err u104))
+(define-constant err-invalid-title-length (err u105))
+
+;; Events
+(define-data-var last-event-id uint u0)
+
+(define-map Events uint {
+  event-type: (string-utf8 32),
+  quest-id: uint,
+  user: principal,
+  timestamp: uint
+})
 
 ;; Data Variables
 (define-map Users principal 
@@ -24,16 +35,37 @@
     difficulty: uint,
     xp-reward: uint,
     completed: bool,
-    completed-by: (optional principal)
+    completed-by: (optional principal),
+    created-at: uint
   }
 )
 
 (define-data-var quest-counter uint u0)
 
+;; Private Functions
+(define-private (emit-event (event-type (string-utf8 32)) (quest-id uint))
+  (let ((event-id (var-get last-event-id)))
+    (map-set Events event-id {
+      event-type: event-type,
+      quest-id: quest-id,
+      user: tx-sender,
+      timestamp: block-height
+    })
+    (var-set last-event-id (+ event-id u1))
+    true)
+)
+
+(define-private (calculate-level (xp uint))
+  (let ((base-level (/ xp u100)))
+    (+ base-level (/ (mod xp u100) u100))
+  )
+)
+
 ;; Public Functions
 (define-public (create-quest (title (string-utf8 64)) (difficulty uint))
   (begin
     (asserts! (and (>= difficulty u1) (<= difficulty u5)) (err err-invalid-difficulty))
+    (asserts! (>= (len title) u1) (err err-invalid-title-length))
     (let ((quest-id (var-get quest-counter)))
       (map-set Quests quest-id {
         creator: tx-sender,
@@ -41,9 +73,11 @@
         difficulty: difficulty,
         xp-reward: (* difficulty u10),
         completed: false,
-        completed-by: none
+        completed-by: none,
+        created-at: block-height
       })
       (var-set quest-counter (+ quest-id u1))
+      (emit-event "quest-created" quest-id)
       (ok quest-id)))
 )
 
@@ -61,6 +95,8 @@
       completed: true,
       completed-by: (some tx-sender)
     }))
+    (emit-event "quest-completed" quest-id)
+    (contract-call? .quest-token mint (get xp-reward quest) tx-sender)
     (ok true))
 )
 
@@ -74,7 +110,6 @@
   (ok (map-get? Quests quest-id))
 )
 
-;; Private Functions
-(define-private (calculate-level (xp uint))
-  (/ xp u100)
+(define-read-only (get-events (from uint) (to uint))
+  (ok (map-get? Events from))
 )

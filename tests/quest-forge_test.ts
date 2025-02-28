@@ -43,6 +43,24 @@ Clarinet.test({
   },
 });
 
+Clarinet.test({
+  name: "Test quest creation with empty title",
+  async fn(chain: Chain, accounts: Map<string, Account>) {
+    const wallet1 = accounts.get("wallet_1")!;
+
+    let block = chain.mineBlock([
+      Tx.contractCall(
+        "quest-forge",
+        "create-quest",
+        [types.utf8(""), types.uint(3)],
+        wallet1.address
+      ),
+    ]);
+
+    assertEquals(block.receipts[0].result.expectErr(), "u105");
+  },
+});
+
 Clarinet.test({  
   name: "Test quest completion and check completed-by field",
   async fn(chain: Chain, accounts: Map<string, Account>) {
