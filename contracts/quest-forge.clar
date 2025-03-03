@@ -8,8 +8,12 @@
 (define-constant err-already-completed (err u103))
 (define-constant err-invalid-difficulty (err u104))
 (define-constant err-invalid-title-length (err u105))
+(define-constant err-quest-token-failed (err u106))
+(define-constant err-title-too-long (err u107))
+(define-constant max-title-length u64)
 
-;; Events
+;; Data Variables
+(define-data-var completing-quest bool false)
 (define-data-var last-event-id uint u0)
 
 (define-map Events uint {
@@ -19,7 +23,6 @@
   timestamp: uint
 })
 
-;; Data Variables
 (define-map Users principal 
   {
     level: uint,
@@ -56,8 +59,10 @@
 )
 
 (define-private (calculate-level (xp uint))
-  (let ((base-level (/ xp u100)))
-    (+ base-level (/ (mod xp u100) u100))
+  (let ((base-xp u100))
+    (if (> xp u1000000) 
+      u1000
+      (+ (/ xp base-xp) (/ (mod xp base-xp) base-xp)))
   )
 )
 
@@ -65,7 +70,8 @@
 (define-public (create-quest (title (string-utf8 64)) (difficulty uint))
   (begin
     (asserts! (and (>= difficulty u1) (<= difficulty u5)) (err err-invalid-difficulty))
-    (asserts! (>= (len title) u1) (err err-invalid-title-length))
+    (asserts! (and (>= (len title) u1) (<= (len title) max-title-length)) 
+      (err err-invalid-title-length))
     (let ((quest-id (var-get quest-counter)))
       (map-set Quests quest-id {
         creator: tx-sender,
@@ -82,22 +88,27 @@
 )
 
 (define-public (complete-quest (quest-id uint))
-  (let ((quest (unwrap! (map-get? Quests quest-id) (err err-quest-not-found)))
-        (user (default-to {level: u1, experience: u0, quests-completed: u0} 
-            (map-get? Users tx-sender))))
-    (asserts! (not (get completed quest)) (err err-already-completed))
-    (map-set Users tx-sender {
-      level: (calculate-level (+ (get experience user) (get xp-reward quest))),
-      experience: (+ (get experience user) (get xp-reward quest)),
-      quests-completed: (+ (get quests-completed user) u1)
-    })
-    (map-set Quests quest-id (merge quest {
-      completed: true,
-      completed-by: (some tx-sender)
-    }))
-    (emit-event "quest-completed" quest-id)
-    (contract-call? .quest-token mint (get xp-reward quest) tx-sender)
-    (ok true))
+  (begin
+    (asserts! (not (var-get completing-quest)) (err err-already-completed))
+    (var-set completing-quest true)
+    (let ((quest (unwrap! (map-get? Quests quest-id) (err err-quest-not-found)))
+          (user (default-to {level: u1, experience: u0, quests-completed: u0} 
+              (map-get? Users tx-sender))))
+      (asserts! (not (get completed quest)) (err err-already-completed))
+      (try! (map-set Users tx-sender {
+        level: (calculate-level (+ (get experience user) (get xp-reward quest))),
+        experience: (+ (get experience user) (get xp-reward quest)),
+        quests-completed: (+ (get quests-completed user) u1)
+      }))
+      (map-set Quests quest-id (merge quest {
+        completed: true,
+        completed-by: (some tx-sender)
+      }))
+      (emit-event "quest-completed" quest-id)
+      (var-set completing-quest false)
+      (unwrap! (contract-call? .quest-token mint (get xp-reward quest) tx-sender)
+        err-quest-token-failed)
+      (ok true)))
 )
 
 ;; Read Only Functions
@@ -111,5 +122,9 @@
 )
 
 (define-read-only (get-events (from uint) (to uint))
-  (ok (map-get? Events from))
+  (ok (map get-event (list from to)))
+)
+
+(define-private (get-event (id uint))
+  (map-get? Events id)
 )
